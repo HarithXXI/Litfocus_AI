@@ -1,0 +1,203 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+.markdown-body {
+  @apply transition-colors;
+}
+
+.markdown-body h1 {
+  @apply text-3xl font-bold mt-8 mb-4 tracking-tight border-b border-inherit pb-2;
+}
+
+.markdown-body h2 {
+  @apply text-xl font-bold mt-8 mb-4 tracking-tight;
+}
+
+.markdown-body h3 {
+  @apply text-lg font-bold mt-6 mb-3 tracking-tight;
+}
+
+.markdown-body p {
+  @apply mb-4 leading-relaxed opacity-90;
+}
+
+.markdown-body ul, .markdown-body ol {
+  @apply mb-4 pl-6;
+}
+
+.markdown-body ul {
+  @apply list-disc;
+}
+
+.markdown-body ol {
+  @apply list-decimal;
+}
+
+.markdown-body li {
+  @apply mb-1 opacity-90;
+}
+
+.markdown-body strong {
+  @apply font-bold;
+}
+
+.markdown-body blockquote {
+  @apply border-l-4 border-inherit pl-4 italic opacity-70 my-6;
+}
+
+.markdown-body code {
+  @apply bg-neutral-500/10 px-1.5 py-0.5 rounded text-sm font-mono;
+}
+
+.markdown-body pre {
+  @apply bg-neutral-500/10 p-4 rounded-lg overflow-x-auto my-6 border border-inherit;
+}
+
+.markdown-body hr {
+  @apply border-t border-inherit my-8;
+}
+
+/* Specific Sidebar Transitions */
+aside {
+  @apply transition-all duration-300;
+}
+
+/* Prominent Borders */
+.border-subtle { 
+  border-width: 1px !important;
+  border-color: #E2E8F0 !important; /* Slate 200 */
+}
+
+.dark .border-subtle {
+  border-color: #1E293B !important; /* Slate 800 */
+}
+
+.border-medium { 
+  border-width: 2px !important;
+  border-color: #94A3B8 !important; /* Slate 400 */
+}
+
+.dark .border-medium {
+  border-color: #334155 !important; /* Slate 700 */
+}
+
+.border-heavy { 
+  border-width: 3.5px !important;
+  border-color: #64748B !important; /* Slate 500 */
+}
+
+.dark .border-heavy {
+  border-color: #94A3B8 !important; /* Slate 400 */
+}
+
+/* Liquid Glass Effect */
+.liquid-glass {
+  @apply transition-all duration-500;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 
+    0 8px 32px 0 rgba(0, 0, 0, 0.1),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.dark .liquid-glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(40px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 
+    0 8px 32px 0 rgba(0, 0, 0, 0.2),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.liquid-glass-accent {
+  background: rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(32px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.dark .liquid-glass-accent {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(32px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.glass-grain {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.15;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+  z-index: -1;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+}
+
+.ambient-background {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  background: #fbfbfa;
+  transition: background 0.8s ease;
+}
+
+.dark .ambient-background {
+  background: #080808;
+}
+
+.ambient-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  mix-blend-mode: multiply;
+  opacity: 0.5;
+  animation: float 30s infinite alternate ease-in-out;
+}
+
+.dark .ambient-blob {
+  opacity: 0.35;
+  mix-blend-mode: screen;
+  filter: blur(140px);
+}
+
+@keyframes float {
+  0% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(30%, 20%) scale(1.1); }
+  66% { transform: translate(-20%, 40%) scale(0.9); }
+  100% { transform: translate(10%, -10%) scale(1); }
+}
+
+/* High Contrast Text */
+.high-contrast-text {
+  font-weight: 700 !important;
+  color: #000000 !important;
+  opacity: 1 !important;
+}
+
+.dark .high-contrast-text {
+  color: #FFFFFF !important;
+}
+
+.high-contrast-dim {
+  font-weight: 600 !important;
+  color: #000000 !important;
+  opacity: 1 !important;
+}
+
+.dark .high-contrast-dim {
+  color: #FFFFFF !important;
+}

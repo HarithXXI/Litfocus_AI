@@ -1,0 +1,6 @@
+{
+  "name": "LitFocus AI",
+  "description": "A premium SaaS-style Literature Review Assistant that analyzes research papers using Gemini AI. Features include ELI5 summaries, deep academic deep-dives, and a Notion-inspired dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
