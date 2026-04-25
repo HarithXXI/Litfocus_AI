@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, 
+  Loader2, 
   Search, 
   History as HistoryIcon, 
   BookOpen, 
@@ -25,24 +26,37 @@ import {
   LogOut,
   Moon,
   Sun,
-  Type
+  Type,
+  Menu,
+  PanelLeftClose,
+  PanelLeft,
+  ChevronLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
 import { format } from 'date-fns';
+import { jsPDF } from 'jspdf';
+import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
+import { saveAs } from 'file-saver';
 import { cn } from './lib/utils';
-import { analyzePaperStream } from './services/geminiService';
+import mammoth from 'mammoth';
+import * as XLSX from 'xlsx';
 
 // Types
 interface Analysis {
   id: string;
   title: string;
-  content: string;
+  content: string; // detailed markdown
+  summary_short: string;
+  summary_detailed: string;
+  key_points: string[];
+  keywords: string[];
   timestamp: number;
   mode: 'eli5' | 'deep-dive' | 'key-points';
   readingTime?: string;
   sourceType: 'text' | 'url' | 'file';
   excerpt: string;
+  sentiment?: string;
 }
 
 export default function App() {
@@ -53,10 +67,15 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [copied, setCopied] = useState(false);
 
+  // Sidebar states
+  type SidebarState = 'closed' | 'open';
+  const [sidebarState, setSidebarState] = useState<SidebarState>('closed');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
   // Settings states
   const [profile, setProfile] = useState({ name: 'Guest Researcher', bio: 'Academic Enthusiast', avatar: '' });
   const [theme, setTheme] = useState({ darkMode: false, accentColor: '#141414', borderStrength: 'medium' });
-  const [accessibility, setAccessibility] = useState({ fontSize: '14px', highContrast: false, liquidGlass: false });
+  const [accessibility, setAccessibility] = useState({ fontSize: '14px', highContrast: false, liquidGlass: true });
 
   // Load state from localStorage
   useEffect(() => {
@@ -84,6 +103,24 @@ export default function App() {
   const [sourceType, setSourceType] = useState<'text' | 'url' | 'file'>('text');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [analysisMode, setAnalysisMode] = useState<'eli5' | 'deep-dive' | 'key-points'>('eli5');
+  const [isDraggingSidebar, setIsDraggingSidebar] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+
+  useEffect(() => {
+    let interval: any;
+    if (isAnalyzing) {
+      setAnalysisProgress(0);
+      interval = setInterval(() => {
+        setAnalysisProgress(prev => {
+          if (prev >= 90) return prev;
+          return prev + Math.random() * 10;
+        });
+      }, 800);
+    } else {
+      setAnalysisProgress(100);
+    }
+    return () => clearInterval(interval);
+  }, [isAnalyzing]);
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -91,86 +128,173 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const getBorderClass = (extra: string = '') => {
-    const strength = `border-${theme.borderStrength}`;
-    return cn(strength, extra);
+  const exportToPDF = (analysis: Analysis) => {
+    const doc = new jsPDF();
+    let y = 20;
+    doc.setFontSize(22);
+    doc.text(analysis.title, 20, y);
+    y += 15;
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("Summary", 20, y);
+    y += 8;
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "normal");
+    const summaryLines = doc.splitTextToSize(analysis.summary_short, 170);
+    doc.text(summaryLines, 20, y);
+    y += (summaryLines.length * 6) + 12;
+    
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("Key Findings", 20, y);
+    y += 8;
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "normal");
+    analysis.key_points.forEach((point) => {
+      const pointLines = doc.splitTextToSize(`• ${point}`, 170);
+      if (y + (pointLines.length * 6) > 280) { doc.addPage(); y = 20; }
+      doc.text(pointLines, 20, y);
+      y += (pointLines.length * 6) + 2;
+    });
+    y += 10;
+    
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("Detailed Analysis", 20, y);
+    y += 8;
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "normal");
+    const bodyContent = analysis.summary_detailed.replace(/[#*`]/g, '');
+    const bodyLines = doc.splitTextToSize(bodyContent, 170);
+    bodyLines.forEach((line: string) => {
+      if (y > 280) { doc.addPage(); y = 20; }
+      doc.text(line, 20, y);
+      y += 6;
+    });
+    doc.save(`${analysis.title.replace(/\s+/g, '_')}_LitFocus.pdf`);
   };
 
-  const handleAnalyze = async () => {
-    if (sourceType !== 'file' && !inputText.trim()) return;
-    if (sourceType === 'file' && !selectedFile) return;
+  const exportToDOCX = async (analysis: Analysis) => {
+    const doc = new Document({
+      sections: [{
+        children: [
+          new Paragraph({ text: analysis.title, heading: HeadingLevel.HEADING_1 }),
+          new Paragraph({ text: "\n" }),
+          new Paragraph({ children: [new TextRun({ text: "Summary", bold: true, size: 28 })] }),
+          new Paragraph({ text: analysis.summary_short }),
+          new Paragraph({ text: "\n" }),
+          new Paragraph({ children: [new TextRun({ text: "Key Points", bold: true, size: 28 })] }),
+          ...analysis.key_points.map(p => new Paragraph({ text: p, bullet: { level: 0 } })),
+          new Paragraph({ text: "\n" }),
+          new Paragraph({ children: [new TextRun({ text: "Detailed Analysis", bold: true, size: 28 })] }),
+          new Paragraph({ text: analysis.summary_detailed.replace(/[#*`]/g, '') }),
+        ],
+      }],
+    });
+    const blob = await Packer.toBlob(doc);
+    saveAs(blob, `${analysis.title.replace(/\s+/g, '_')}_LitFocus.docx`);
+  };
+
+  const exportToTXT = (analysis: Analysis) => {
+    const text = `${analysis.title}\n\nSUMMARY\n${analysis.summary_short}\n\nKEY POINTS\n${analysis.key_points.map(p => `• ${p}`).join('\n')}\n\nDETAILED ANALYSIS\n${analysis.summary_detailed.replace(/[#*`]/g, '')}`;
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    saveAs(blob, `${analysis.title.replace(/\s+/g, '_')}.txt`);
+  };
+
+  const exportToMD = (analysis: Analysis) => {
+    const md = `# ${analysis.title}\n\n## Summary\n${analysis.summary_short}\n\n## Key Points\n${analysis.key_points.map(p => `* ${p}`).join('\n')}\n\n## Analysis\n${analysis.summary_detailed}`;
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    saveAs(blob, `${analysis.title.replace(/\s+/g, '_')}.md`);
+  };
+
+  const getBorderClass = (extra: string = '') => {
+    return cn(
+      theme.darkMode ? "border-stone-800" : "border-stone-200",
+      theme.borderStrength === 'subtle' ? "border" : theme.borderStrength === 'medium' ? "border-2" : "border-[3.5px]",
+      extra
+    );
+  };
+
+  const handleAnalyze = async (droppedFile?: File) => {
+    const fileToAnalyze = droppedFile || (sourceType === 'file' ? selectedFile : null);
+    const activeSourceType = droppedFile ? 'file' : sourceType;
+
+    if (activeSourceType !== 'file' && !inputText.trim()) return;
+    if (activeSourceType === 'file' && !fileToAnalyze) return;
     
     setIsAnalyzing(true);
     const tempId = crypto.randomUUID();
     
     try {
-      let fileData: { data: string; mimeType: string } | undefined;
+      let textToAnalyze = inputText;
       
-      if (sourceType === 'file' && selectedFile) {
-        const reader = new FileReader();
-        const base64Promise = new Promise<string>((resolve) => {
-          reader.onload = () => {
-            const result = reader.result as string;
-            resolve(result.split(',')[1]);
-          };
+      if (activeSourceType === 'url') {
+        const extractRes = await fetch('/api/extract', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: inputText })
         });
-        reader.readAsDataURL(selectedFile);
-        const base64Data = await base64Promise;
-        fileData = { data: base64Data, mimeType: selectedFile.type };
+        if (!extractRes.ok) throw new Error("Failed to extract content from URL");
+        const extractData = await extractRes.json();
+        textToAnalyze = extractData.text;
+      } else if (activeSourceType === 'file' && fileToAnalyze) {
+        if (fileToAnalyze.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+          const arrayBuffer = await fileToAnalyze.arrayBuffer();
+          const result = await mammoth.extractRawText({ arrayBuffer });
+          textToAnalyze = result.value;
+        } else if (fileToAnalyze.type === 'text/plain') {
+          textToAnalyze = await fileToAnalyze.text();
+        } else if (fileToAnalyze.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+          const arrayBuffer = await fileToAnalyze.arrayBuffer();
+          const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+          let fullXlsxText = '';
+          workbook.SheetNames.forEach(sheetName => {
+            const worksheet = workbook.Sheets[sheetName];
+            fullXlsxText += `[Sheet: ${sheetName}]\n${XLSX.utils.sheet_to_txt(worksheet)}\n\n`;
+          });
+          textToAnalyze = fullXlsxText;
+        } else {
+          textToAnalyze = await fileToAnalyze.text().catch(() => "Binary content");
+        }
       }
 
-      const stream = await analyzePaperStream(inputText, analysisMode, fileData);
-      
-      let fullContent = '';
-      
-      // Initial placeholder
-      const initialAnalysis: Analysis = {
+      const analyzeRes = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: textToAnalyze, mode: analysisMode })
+      });
+
+      if (!analyzeRes.ok) {
+        const errData = await analyzeRes.json();
+        throw new Error(errData.error || 'Failed to analyze');
+      }
+
+      const data = await analyzeRes.json();
+
+      const newAnalysis: Analysis = {
         id: tempId,
-        title: sourceType === 'url' ? 'URL Analysis' : (sourceType === 'file' ? selectedFile?.name || 'File Analysis' : 'Text Analysis'),
-        content: '',
+        title: data.title || (activeSourceType === 'url' ? 'URL Analysis' : (fileToAnalyze?.name || 'Text Analysis')),
+        content: data.summary_detailed,
+        summary_short: data.summary_short,
+        summary_detailed: data.summary_detailed,
+        key_points: data.key_points || [],
+        keywords: data.keywords || [],
+        sentiment: data.sentiment,
+        readingTime: data.reading_time || '5 mins',
         timestamp: Date.now(),
         mode: analysisMode,
-        readingTime: 'Estimating...',
-        sourceType,
-        excerpt: sourceType === 'file' ? `File: ${selectedFile?.name}` : inputText.slice(0, 100) + '...'
+        sourceType: activeSourceType,
+        excerpt: (textToAnalyze || inputText).substring(0, 200) + '...'
       };
-      
-      setCurrentAnalysis(initialAnalysis);
+
+      setHistory(prev => [newAnalysis, ...prev]);
+      setCurrentAnalysis(newAnalysis);
       setView('analysis');
-
-      for await (const chunk of stream) {
-        fullContent += chunk.text || '';
-        
-        // Extract title and reading time if possible from current content
-        const titleMatch = fullContent?.match(/^# (.*)/m);
-        const title = titleMatch ? titleMatch[1] : initialAnalysis.title;
-        
-        const readingTimeMatch = fullContent?.match(/Reading Time Estimate: (.*)/i);
-        const readingTime = readingTimeMatch ? readingTimeMatch[1] : initialAnalysis.readingTime;
-
-        setCurrentAnalysis(prev => prev ? ({
-          ...prev,
-          content: fullContent,
-          title,
-          readingTime
-        }) : null);
-      }
-      
-      // Final update to history
-      const finalAnalysis = {
-        ...initialAnalysis,
-        content: fullContent,
-        title: fullContent.match(/^# (.*)/m)?.[1] || initialAnalysis.title,
-        readingTime: fullContent.match(/Reading Time Estimate: (.*)/i)?.[1] || '3 min read'
-      };
-
-      setHistory(prev => [finalAnalysis, ...prev]);
-      setCurrentAnalysis(finalAnalysis);
       setInputText('');
-    } catch (error) {
-      console.error(error);
-      alert("Analysis failed. Please check your API key or input.");
-      setView('input');
+      setSelectedFile(null);
+    } catch (error: any) {
+      console.error('Analysis failed:', error);
+      alert(error.message || 'Analysis failed. Please try again.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -185,148 +309,360 @@ export default function App() {
     }
   };
 
-  const filteredHistory = history.filter(item => 
-    item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.excerpt.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const [filteredHistory, setFilteredHistory] = useState<Analysis[]>([]);
+  
+  useEffect(() => {
+    setFilteredHistory(history.filter(item => 
+      item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      item.excerpt.toLowerCase().includes(searchTerm.toLowerCase())
+    ));
+  }, [history, searchTerm]);
+
+  // Handle window resize for responsive sidebar
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 1024 : false);
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 1024);
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        setSidebarState(prev => prev === 'open' ? 'closed' : 'open');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Close sidebar on navigation in mobile
+  useEffect(() => {
+    if (isMobile) setSidebarState('closed');
+  }, [view, isMobile]);
 
   return (
     <div className={cn(
-      "flex h-screen transition-colors duration-200 font-sans overflow-hidden relative",
-      theme.darkMode && "dark",
-      accessibility.liquidGlass 
-        ? (theme.darkMode ? "text-[#E3E3E3]" : (accessibility.highContrast ? "text-black" : "text-[#37352F]"))
-        : (theme.darkMode 
-            ? "bg-[#141414] text-[#E3E3E3]" 
-            : (accessibility.highContrast ? "bg-white text-black" : "bg-[#FBFBFA] text-[#37352F]"))
+      "flex h-screen transition-colors duration-250 font-sans overflow-hidden relative",
+      theme.darkMode ? "bg-stone-950 text-stone-200" : "bg-stone-50 text-stone-900"
     )} style={{ fontSize: accessibility.fontSize }}>
-      {accessibility.liquidGlass && (
-        <div className="ambient-background shadow-inner">
-          <div className="ambient-blob w-[600px] h-[600px] bg-blue-500/40 dark:bg-blue-600/30 top-[-15%] left-[-10%]" />
-          <div className="ambient-blob w-[700px] h-[700px] bg-indigo-500/40 dark:bg-indigo-600/30 bottom-[-20%] right-[-10%]" style={{ animationDelay: '2s' }} />
-          <div className="ambient-blob w-[500px] h-[500px] bg-violet-400/40 dark:bg-violet-500/30 top-[35%] right-[15%]" style={{ animationDelay: '4s' }} />
-          <div className="ambient-blob w-[450px] h-[450px] bg-sky-400/30 dark:bg-sky-500/20 bottom-[10%] left-[10%]" style={{ animationDelay: '6s' }} />
-        </div>
-      )}
-      <div className="flex h-full w-full relative z-10">
-        {/* Sidebar */}
-        <aside className={cn(
-          "w-64 flex-shrink-0 border-r flex flex-col relative transition-all duration-500",
-          accessibility.liquidGlass 
-            ? "liquid-glass" 
-            : (theme.darkMode ? "bg-[#202020]" : "bg-[#F7F6F3]"),
-          getBorderClass()
-        )}>
-          {accessibility.liquidGlass && <div className="glass-grain" />}
-        <div className={cn(
-          "p-4 flex items-center gap-2 cursor-pointer transition-colors",
-          theme.darkMode ? "hover:bg-[#2A2A2A]" : "hover:bg-[#EBEAE9]"
-        )} onClick={() => setView('input')}>
-          <div className="w-6 h-6 bg-[#141414] rounded flex items-center justify-center">
-            <BookOpen className="w-4 h-4 text-white" />
-          </div>
-          <span className="font-semibold text-sm tracking-tight">LitFocus AI</span>
-        </div>
+      
+      {/* Sidebar Overlay Backdrop */}
+      <AnimatePresence>
+        {sidebarState === 'open' && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSidebarState('closed')}
+            className="fixed inset-0 bg-black/[0.02] z-40"
+          />
+        )}
+      </AnimatePresence>
 
-        <div className="px-4 py-2 mb-4 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full bg-[#141414] text-white flex items-center justify-center text-sm font-bold">
-            {profile.name[0]}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className={cn("text-sm font-bold truncate leading-tight", accessibility.highContrast && "high-contrast-text")}>{profile.name}</p>
-            <p className={cn("text-xs opacity-60 truncate leading-tight mt-0.5", accessibility.highContrast && "high-contrast-dim")}>{profile.bio}</p>
-          </div>
-        </div>
-
-        <div className="px-3 mb-2">
-          <button 
-            onClick={() => { setView('input'); setCurrentAnalysis(null); }}
-            className={cn(
-              "w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md transition-colors",
-              theme.darkMode ? "hover:bg-[#2A2A2A]" : "hover:bg-[#EBEAE9]"
-            )}
+      {/* Floating Sidebar */}
+      <AnimatePresence>
+        {sidebarState === 'open' && (
+          <motion.aside
+            initial={{ x: '-100%', opacity: 0 }}
+            animate={{ x: '0%', opacity: 1 }}
+            exit={{ x: '-100%', opacity: 0 }}
+            transition={{ duration: 0.25, ease: "easeOut" }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (e.dataTransfer.types.includes('Files')) {
+                setIsDraggingSidebar(true);
+              }
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDraggingSidebar(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDraggingSidebar(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) {
+                if (file.size > 50 * 1024 * 1024) {
+                  alert("File is too large. Max size is 50MB.");
+                  return;
+                }
+                setSourceType('file');
+                setSelectedFile(file);
+                handleAnalyze(file);
+              }
+            }}
+            className="minimal-sidebar"
           >
-            <Plus className="w-4 h-4" />
-            <span>New Analysis</span>
-          </button>
-        </div>
 
-        <div className="px-3 mb-4">
-          <div className="relative group">
-            <Search className="absolute left-2 top-1.5 w-3.5 h-3.5 text-[#91918E]" />
-            <input 
-              type="text" 
-              placeholder="Search history..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-7 pr-2 py-1.5 text-xs bg-[#EBEAE9] bg-opacity-50 border-none rounded focus:ring-1 focus:ring-[#141414] focus:outline-none placeholder-[#91918E]"
-            />
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-1 space-y-0.5">
-          <div className="px-3 py-2 text-[10px] font-bold text-[#91918E] uppercase tracking-wider">History</div>
-          {filteredHistory.length === 0 ? (
-            <div className="px-5 py-4 text-center">
-              <HistoryIcon className="w-8 h-8 text-[#EBEAE9] mx-auto mb-2" />
-              <p className="text-[10px] text-[#91918E]">No history yet</p>
-            </div>
-          ) : (
-            <AnimatePresence initial={false}>
-              {filteredHistory.map((item) => (
-                <motion.div
-                  layout
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
+            {/* Drag Overlay */}
+            <AnimatePresence>
+              {isDraggingSidebar && (
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  key={item.id}
-                  onClick={() => { setCurrentAnalysis(item); setView('analysis'); }}
-                  className={cn(
-                    "group flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg cursor-pointer transition-all mx-1",
-                    currentAnalysis?.id === item.id 
-                      ? (accessibility.liquidGlass ? "liquid-glass-accent text-blue-500 font-bold" : "bg-[#EBEAE9] text-[#37352F] font-medium") 
-                      : (accessibility.liquidGlass ? "hover:liquid-glass-accent text-inherit" : "hover:bg-[#EBEAE9] text-[#37352F] opacity-80 hover:opacity-100")
-                  )}
+                  className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-blue-500/10 backdrop-blur-[2px] border-2 border-dashed border-blue-500/50 rounded-2xl m-2 pointer-events-none"
                 >
-                  <FileText className="w-3.5 h-3.5 flex-shrink-0 text-[#91918E]" />
-                  <span className="truncate flex-1">{item.title}</span>
-                  <button 
-                    onClick={(e) => deleteFromHistory(item.id, e)}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#D9D8D6] rounded transition-opacity"
-                  >
-                    <Trash2 className="w-3 h-3 text-[#91918E]" />
-                  </button>
+                  <div className="p-4 bg-white dark:bg-gray-800 rounded-full shadow-xl mb-4 border border-blue-100 dark:border-blue-900/50">
+                    <Upload className="w-8 h-8 text-blue-500 animate-bounce" />
+                  </div>
+                  <div className="text-center px-4">
+                    <p className="text-sm font-bold text-blue-600 dark:text-blue-400">Drop to Analyze</p>
+                    <p className="text-[10px] opacity-60 mt-1">Automatic parsing triggered on drop</p>
+                  </div>
                 </motion.div>
-              ))}
+              )}
             </AnimatePresence>
-          )}
-        </div>
+            
+            {/* Sidebar Header & Close Toggle */}
+            <div className={cn(
+              "p-4 flex items-center justify-between gap-2 overflow-hidden",
+              isSidebarCollapsed && !isMobile ? "flex-col" : "flex-row"
+            )}>
+              <div 
+                className="flex items-center gap-2 cursor-pointer transition-colors"
+                onClick={() => setView('input')}
+              >
+                <div className="w-6 h-6 bg-[#141414] rounded flex-shrink-0 flex items-center justify-center">
+                  <BookOpen className="w-4 h-4 text-white" />
+                </div>
+                {(!isSidebarCollapsed || isMobile) && (
+                  <motion.span 
+                    initial={{ opacity: 0 }} 
+                    animate={{ opacity: 1 }}
+                    className="font-semibold text-sm tracking-tight truncate"
+                  >
+                    LitFocus AI
+                  </motion.span>
+                )}
+              </div>
+              
+              <button 
+                onClick={() => setSidebarState('closed')}
+                className={cn(
+                  "p-1.5 rounded-md transition-colors",
+                  theme.darkMode ? "hover:bg-white/10" : "hover:bg-black/5"
+                )}
+                title="Close sidebar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-        <div className="mt-auto p-2 space-y-0.5 border-t border-inherit">
-          <button 
-            onClick={() => setView('settings')}
-            className={cn(
-              "w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg transition-colors",
-              view === 'settings' ? (theme.darkMode ? "bg-[#333333]" : "bg-[#EBEAE9]") : (theme.darkMode ? "hover:bg-[#2A2A2A]" : "hover:bg-[#EBEAE9]")
+            {/* Profile Bar */}
+            <div className={cn(
+              "px-4 py-2 mb-4 flex items-center gap-3 overflow-hidden transition-all",
+              isSidebarCollapsed && !isMobile ? "justify-center" : ""
+            )}>
+              <div 
+                className="w-9 h-9 rounded-full bg-[#141414] text-white flex items-center justify-center text-sm font-bold flex-shrink-0 cursor-pointer"
+                onClick={() => setView('settings')}
+              >
+                {profile.name[0]}
+              </div>
+              {(!isSidebarCollapsed || isMobile) && (
+                <motion.div 
+                  initial={{ opacity: 0 }} 
+                  animate={{ opacity: 1 }}
+                  className="flex-1 min-w-0"
+                >
+                  <p className={cn("text-sm font-bold truncate leading-tight", accessibility.highContrast && "high-contrast-text")}>{profile.name}</p>
+                  <p className={cn("text-xs opacity-60 truncate leading-tight mt-0.5", accessibility.highContrast && "high-contrast-dim")}>{profile.bio}</p>
+                </motion.div>
+              )}
+            </div>
+
+            {/* Sidebar Actions */}
+            <div className="px-3 mb-2">
+              <button 
+                onClick={() => { setView('input'); setCurrentAnalysis(null); }}
+                className={cn(
+                  "w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md transition-colors group",
+                  theme.darkMode ? "hover:bg-[#2A2A2A]" : "hover:bg-[#EBEAE9]",
+                  isSidebarCollapsed && !isMobile ? "justify-center" : ""
+                )}
+                title="New Analysis"
+              >
+                <Plus className="w-4 h-4 flex-shrink-0" />
+                {(!isSidebarCollapsed || isMobile) && <span className="truncate">New Analysis</span>}
+              </button>
+            </div>
+
+            {(!isSidebarCollapsed || isMobile) && (
+              <motion.div 
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                className="px-3 mb-4"
+              >
+                <div className="relative group">
+                  <Search className="absolute left-2 top-1.5 w-3.5 h-3.5 text-[#91918E]" />
+                  <input 
+                    type="text" 
+                    placeholder="Search history..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full pl-7 pr-2 py-1.5 text-xs bg-[#EBEAE9] bg-opacity-50 border-none rounded focus:ring-1 focus:ring-[#141414] focus:outline-none placeholder-[#91918E]"
+                  />
+                </div>
+              </motion.div>
             )}
-          >
-            <SettingsIcon className="w-3.5 h-3.5" />
-            <span>Settings</span>
-          </button>
-          <div className="px-4 py-2 text-[10px] opacity-40">
-            © 2026 LitFocus AI
-          </div>
-        </div>
-      </aside>
 
-      {/* Main Content */}
-      <main className={cn(
-        "flex-1 overflow-y-auto relative transition-all duration-500",
-        accessibility.liquidGlass 
-          ? "bg-transparent backdrop-blur-md" 
-          : (theme.darkMode ? "bg-[#141414]" : "bg-white")
-      )}>
-        <AnimatePresence mode="wait">
+            {/* Processing Progress */}
+            <AnimatePresence>
+              {isAnalyzing && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="px-4 mb-4"
+                >
+                  <div className={cn(
+                    "p-3 rounded-lg border flex flex-col gap-2",
+                    theme.darkMode ? "bg-white/5 border-white/10" : "bg-black/5 border-black/10"
+                  )}>
+                    <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider">
+                      <div className="flex items-center gap-1.5">
+                        <Loader2 className="w-3 h-3 animate-spin text-blue-500" />
+                        <span>Analyzing...</span>
+                      </div>
+                      <span className="opacity-60">{Math.round(analysisProgress)}%</span>
+                    </div>
+                    <div className="h-1.5 w-full bg-black/10 dark:bg-white/10 rounded-full overflow-hidden">
+                      <motion.div 
+                        className="h-full bg-blue-500"
+                        animate={{ width: `${analysisProgress}%` }}
+                        transition={{ type: "spring", damping: 20, stiffness: 100 }}
+                      />
+                    </div>
+                    <p className="text-[9px] opacity-40 leading-tight italic">
+                      AI is extracting context...
+                    </p>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* History List */}
+            <div className="flex-1 overflow-y-auto px-1 space-y-0.5 custom-scrollbar">
+              {(!isSidebarCollapsed || isMobile) && (
+                <div className="px-3 py-2 text-[10px] font-bold text-[#91918E] uppercase tracking-wider">History</div>
+              )}
+              
+              {filteredHistory.length === 0 ? (
+                (!isSidebarCollapsed || isMobile) && (
+                  <div className="px-5 py-4 text-center">
+                    <HistoryIcon className="w-8 h-8 text-[#EBEAE9] mx-auto mb-2" />
+                    <p className="text-[10px] text-[#91918E]">No history yet</p>
+                  </div>
+                )
+              ) : (
+                <AnimatePresence initial={false}>
+                  {filteredHistory.map((item) => (
+                    <motion.div
+                      layout
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      key={item.id}
+                      onClick={() => { setCurrentAnalysis(item); setView('analysis'); }}
+                      className={cn(
+                        "group flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg cursor-pointer transition-all mx-1 mb-0.5",
+                        currentAnalysis?.id === item.id 
+                          ? "bg-blue-500/10 text-blue-600 font-medium" 
+                          : "hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-600 dark:text-stone-400 opacity-80 hover:opacity-100",
+                        isSidebarCollapsed && !isMobile ? "justify-center" : ""
+                      )}
+                      title={item.title}
+                    >
+                      <FileText className="w-3.5 h-3.5 flex-shrink-0 text-[#91918E]" />
+                      {(!isSidebarCollapsed || isMobile) && <span className="truncate flex-1">{item.title}</span>}
+                      {(!isSidebarCollapsed || isMobile) && (
+                        <button 
+                          onClick={(e) => deleteFromHistory(item.id, e)}
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#D9D8D6] rounded transition-opacity"
+                        >
+                          <Trash2 className="w-3 h-3 text-[#91918E]" />
+                        </button>
+                      )}
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              )}
+            </div>
+
+            {/* Footer Actions */}
+            <div className="mt-auto p-2 space-y-0.5 border-t border-stone-200 dark:border-stone-800">
+              <button 
+                onClick={() => setView('settings')}
+                className={cn(
+                  "w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg transition-colors",
+                  view === 'settings' ? (theme.darkMode ? "bg-stone-800" : "bg-stone-100") : "hover:bg-stone-50 dark:hover:bg-stone-800",
+                  isSidebarCollapsed && !isMobile ? "justify-center" : ""
+                )}
+                title="Settings"
+              >
+                <SettingsIcon className="w-3.5 h-3.5 flex-shrink-0" />
+                {(!isSidebarCollapsed || isMobile) && <span>Settings</span>}
+              </button>
+              {(!isSidebarCollapsed || isMobile) && (
+                <div className="px-4 py-2 text-[10px] opacity-40">
+                  © 2026 LitFocus AI
+                </div>
+              )}
+            </div>
+          </motion.aside>
+        )}
+      </AnimatePresence>
+
+      <div className="flex h-full w-full relative z-10">
+        {/* Main Content */}
+        <main className={cn(
+          "flex-1 flex flex-col h-full overflow-hidden transition-all duration-500"
+        )}>
+          {/* Header Mobile Toggle */}
+          <header className={cn(
+            "h-14 px-4 flex items-center justify-between border-b relative z-30"
+          )}>
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setSidebarState(sidebarState === 'open' ? 'closed' : 'open')}
+                className={cn(
+                  "p-2 rounded-lg transition-all duration-300",
+                  sidebarState === 'open' ? "opacity-0 scale-0 w-0 p-0" : "opacity-100 scale-100",
+                )}
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+              <h2 className="text-sm font-semibold tracking-tight opacity-60">
+                {view === 'input' ? 'New Analysis' : view === 'analysis' ? 'Analysis View' : 'Settings'}
+              </h2>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={() => setTheme({...theme, darkMode: !theme.darkMode})}
+                className={cn(
+                  "p-2 rounded-lg transition-colors",
+                  theme.darkMode ? "text-yellow-400 hover:bg-white/10" : "text-gray-500 hover:bg-black/5"
+                )}
+              >
+                {theme.darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              </button>
+            </div>
+          </header>
+
+          <div className="flex-1 overflow-y-auto custom-scrollbar">
+            <AnimatePresence mode="wait">
           {view === 'input' ? (
             <motion.div 
               key="input"
@@ -350,11 +686,9 @@ export default function App() {
               </div>
 
               <div className={cn(
-                "border rounded-xl shadow-sm overflow-hidden mb-8 transition-all duration-500 relative",
-                accessibility.liquidGlass ? "liquid-glass" : (theme.darkMode ? "bg-[#252525]" : "bg-white"),
-                getBorderClass()
+                "border rounded-xl shadow-sm overflow-hidden mb-8 transition-all duration-700 relative",
+                theme.darkMode ? "bg-stone-900 border-white/5" : "bg-white border-stone-200"
               )}>
-                {accessibility.liquidGlass && <div className="glass-grain opacity-10" />}
                 <div className="flex border-b border-inherit">
                   {(['text', 'url', 'file'] as const).map((type) => (
                     <button 
@@ -421,7 +755,7 @@ export default function App() {
                           <div className="flex flex-col items-center justify-center pt-5 pb-6">
                             <Upload className="w-8 h-8 text-[#91918E] mb-3 group-hover:text-inherit transition-colors" />
                             <p className="mb-2 text-sm font-medium">Click to upload or drag and drop</p>
-                            <p className="text-xs opacity-60">PDF, TXT, DOCX, or Images (MAX 50MB)</p>
+                            <p className="text-xs opacity-60">PDF, TXT, DOCX, PPTX, XLSX, or Images (MAX 50MB)</p>
                           </div>
                           <input 
                             type="file" 
@@ -458,37 +792,34 @@ export default function App() {
                       className={cn(
                         "px-4 py-2 rounded-full text-xs font-medium border transition-all",
                         analysisMode === mode 
-                          ? (theme.darkMode ? "bg-white text-black border-white" : "bg-[#141414] text-white border-[#141414]") 
-                          : (accessibility.liquidGlass 
-                              ? "liquid-glass-accent border-opacity-50" 
-                              : (theme.darkMode ? "bg-[#252525] border-[#444444] text-white hover:border-white" : "bg-white text-[#37352F] border-[#D1D1D1] hover:border-[#141414]")),
-                        accessibility.liquidGlass && analysisMode === mode && "ring-2 ring-blue-500/50"
+                          ? (theme.darkMode ? "bg-stone-200 text-stone-900 border-stone-200" : "bg-stone-900 text-white border-stone-900") 
+                          : (theme.darkMode ? "bg-stone-900 border-stone-800 text-stone-400 hover:border-stone-600" : "bg-white text-stone-600 border-stone-200 hover:border-stone-400")
                       )}
                     >
-                      {mode === 'eli5' ? 'ELI5' : mode === 'deep-dive' ? 'Deep Dive' : 'Key Points'}
+                      {mode === 'eli5' ? 'Explain Like I\'m Five' : mode === 'deep-dive' ? 'Technical Research Dive' : 'Key Point Extraction'}
                     </button>
                   ))}
                 </div>
 
                 <button 
-                  onClick={handleAnalyze}
+                  onClick={() => handleAnalyze()}
                   disabled={isAnalyzing || (sourceType !== 'file' && !inputText.trim()) || (sourceType === 'file' && !selectedFile)}
                   className={cn(
                     "w-full py-3 rounded-lg font-medium transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg",
-                    accessibility.liquidGlass 
-                      ? "liquid-glass bg-blue-500/20 text-blue-500 border-blue-500/50 hover:bg-blue-500/30" 
-                      : (theme.darkMode ? "bg-white text-black hover:bg-[#E0E0E0]" : "bg-[#141414] text-white hover:bg-[#2A2A2A]")
+                    isAnalyzing || (sourceType !== 'file' && !inputText.trim()) || (sourceType === 'file' && !selectedFile)
+                      ? "bg-stone-200 text-stone-400 dark:bg-stone-800 dark:text-stone-500"
+                      : "bg-blue-600 text-white hover:bg-blue-700"
                   )}
                 >
                   {isAnalyzing ? (
                     <>
-                      <div className={cn("w-4 h-4 border-2 rounded-full animate-spin", theme.darkMode ? "border-black/20 border-t-black" : "border-white/20 border-t-white")} />
-                      Analyzing with Gemini...
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      Processing...
                     </>
                   ) : (
                     <>
                       <Sparkles className="w-4 h-4" />
-                      Analyze Now
+                      Start Analysis
                     </>
                   )}
                 </button>
@@ -507,12 +838,12 @@ export default function App() {
                   <div className="flex items-center gap-4">
                     <button 
                       onClick={() => setView('input')}
-                      className={cn("p-1 rounded-md transition-colors", theme.darkMode ? "hover:bg-[#2A2A2A]" : "hover:bg-[#EBEAE9]")}
+                      className={cn("p-1 rounded-md transition-colors", theme.darkMode ? "hover:bg-stone-800" : "hover:bg-stone-100")}
                     >
                       <ChevronRight className="w-5 h-5 rotate-180" />
                     </button>
                     <div>
-                      <h1 className="text-3xl font-bold tracking-tight mb-1">{currentAnalysis.title}</h1>
+                      <h1 className="text-[28px] font-bold tracking-tight leading-tight mb-1">{currentAnalysis.title}</h1>
                       <div className="flex items-center gap-3 text-xs opacity-60">
                         <span className="flex items-center gap-1">
                           <Clock className="w-3 h-3" />
@@ -525,34 +856,104 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
+                    <div className="relative group/export">
+                      <button className={cn("p-2 rounded-md transition-colors flex items-center gap-2 px-4 shadow-sm border", theme.darkMode ? "bg-stone-800 border-stone-700 hover:bg-stone-700 text-stone-200" : "bg-white border-stone-200 hover:bg-stone-50 text-stone-600")}>
+                        <FileText className="w-4 h-4" />
+                        <span className="text-xs font-medium">Export</span>
+                      </button>
+                      <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-lg shadow-xl opacity-0 translate-y-2 pointer-events-none group-hover/export:opacity-100 group-hover/export:translate-y-0 group-hover/export:pointer-events-auto transition-all z-50 overflow-hidden">
+                        {[
+                          { name: 'PDF Document', icon: FileText, handler: () => exportToPDF(currentAnalysis) },
+                          { name: 'Word (.docx)', icon: File, handler: () => exportToDOCX(currentAnalysis) },
+                          { name: 'Markdown', icon: Sparkles, handler: () => exportToMD(currentAnalysis) },
+                          { name: 'Plain Text', icon: Type, handler: () => exportToTXT(currentAnalysis) },
+                        ].map((opt) => (
+                          <button
+                            key={opt.name}
+                            onClick={opt.handler}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-xs text-left hover:bg-stone-50 dark:hover:bg-stone-800 transition-colors"
+                          >
+                            <opt.icon className="w-3.5 h-3.5 opacity-60" />
+                            {opt.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     <button 
                       onClick={() => handleCopy(currentAnalysis.content)}
-                      className={cn("p-2 rounded-md transition-colors flex items-center gap-2 px-3", theme.darkMode ? "hover:bg-[#2A2A2A] text-[#91918E]" : "hover:bg-[#EBEAE9] text-[#91918E]")}
+                      className={cn("p-2 rounded-md transition-colors flex items-center gap-2 px-3 border", theme.darkMode ? "hover:bg-stone-800 border-stone-800 text-stone-400" : "hover:bg-stone-50 border-stone-200 text-stone-500")}
                     >
                       {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                      <span className="text-[10px] font-bold uppercase tracking-wider">{copied ? 'Copied' : 'Copy'}</span>
-                    </button>
-                    <button 
-                      onClick={() => { setView('input'); setInputText(currentAnalysis.excerpt); }}
-                      className={cn("p-2 rounded-md transition-colors text-[#91918E]", theme.darkMode ? "hover:bg-[#2A2A2A]" : "hover:bg-[#EBEAE9]")}
-                    >
-                      <RotateCcw className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
 
-                <div className={cn(
-                  "p-8 border rounded-2xl transition-all duration-500 relative overflow-hidden",
-                  accessibility.liquidGlass ? "liquid-glass shadow-xl" : (theme.darkMode ? "bg-[#202020]" : "bg-white"),
-                  getBorderClass()
-                )}>
-                  {accessibility.liquidGlass && <div className="glass-grain opacity-10" />}
+                <div className="space-y-8">
+                  {/* Executive Summary */}
                   <div className={cn(
-                    "prose prose-sm max-w-none prose-headings:font-bold prose-headings:tracking-tight prose-p:leading-relaxed prose-strong:font-bold markdown-body transition-colors",
-                    theme.darkMode ? "prose-invert text-[#E3E3E3]" : "text-[#37352F]"
+                    "p-8 border rounded-2xl transition-all relative overflow-hidden",
+                    theme.darkMode ? "bg-stone-900 border-stone-800" : "bg-white border-stone-200",
+                    getBorderClass()
                   )}>
-                    <Markdown>{currentAnalysis.content}</Markdown>
+                    <h2 className="text-[13px] font-bold uppercase tracking-[0.1em] text-stone-400 mb-4">Summary</h2>
+                    <p className="text-[18px] font-medium leading-[1.6] text-stone-800 dark:text-stone-100 mb-6 italic">
+                      "{currentAnalysis.summary_short}"
+                    </p>
+                    <div className="flex flex-wrap gap-2 pt-4 border-t dark:border-stone-800">
+                      {currentAnalysis.keywords.map(word => (
+                        <span key={word} className="px-2 py-1 bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400 rounded text-[11px] font-medium">#{word}</span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Key Highlights */}
+                  <div className="grid md:grid-cols-2 gap-6">
+                    <div className={cn(
+                      "p-8 border rounded-2xl transition-all",
+                      theme.darkMode ? "bg-stone-900 border-stone-800" : "bg-white border-stone-200",
+                      getBorderClass()
+                    )}>
+                      <h2 className="text-[13px] font-bold uppercase tracking-[0.1em] text-stone-400 mb-6">Key Insights</h2>
+                      <ul className="space-y-4">
+                        {currentAnalysis.key_points.map((point, idx) => (
+                          <li key={idx} className="flex gap-4 text-[15px] leading-relaxed text-stone-600 dark:text-stone-300">
+                            <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500/10 text-blue-500 flex items-center justify-center text-[11px] font-bold">
+                              {idx + 1}
+                            </span>
+                            {point}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className={cn(
+                      "p-8 border rounded-2xl transition-all flex flex-col justify-center items-center text-center",
+                      theme.darkMode ? "bg-stone-900 border-stone-800" : "bg-white border-stone-200",
+                      getBorderClass()
+                    )}>
+                       <h2 className="text-[13px] font-bold uppercase tracking-[0.1em] text-stone-400 mb-4">Reading Sentiment</h2>
+                       <div className="text-4xl mb-4">
+                        {currentAnalysis.sentiment?.toLowerCase().includes('positive') ? '✨' : currentAnalysis.sentiment?.toLowerCase().includes('negative') ? '⚖️' : '📝'}
+                       </div>
+                       <p className="text-[15px] font-medium text-stone-500 capitalize">{currentAnalysis.sentiment || 'Neutral'}</p>
+                    </div>
+                  </div>
+
+                  {/* Detailed Dive */}
+                  <div className={cn(
+                    "p-10 border rounded-2xl transition-all relative overflow-hidden",
+                    theme.darkMode ? "bg-stone-900 border-stone-800 text-stone-200" : "bg-white border-stone-200 text-stone-900",
+                    getBorderClass()
+                  )}>
+                    <h2 className="text-[13px] font-bold uppercase tracking-[0.1em] text-stone-400 mb-8 pb-4 border-b dark:border-stone-800">Detailed Research Dive</h2>
+                    <div className={cn(
+                      "prose prose-sm max-w-none prose-headings:font-bold prose-headings:tracking-tight prose-p:leading-[1.8] prose-p:text-[16px] prose-p:mb-5 prose-strong:font-bold markdown-body transition-colors",
+                      theme.darkMode ? "prose-invert" : ""
+                    )}>
+                      <Markdown>{currentAnalysis.content}</Markdown>
+                    </div>
                   </div>
                 </div>
               </motion.div>
@@ -573,8 +974,11 @@ export default function App() {
                   <User className="w-5 h-5 text-[#91918E]" />
                   <h2 className="text-xl font-bold tracking-tight">Profile</h2>
                 </div>
-                <div className={cn("border rounded-xl p-6 space-y-4 transition-all duration-500 relative overflow-hidden", accessibility.liquidGlass ? "liquid-glass" : (theme.darkMode ? "bg-[#252525]" : "bg-white"), getBorderClass())}>
-                  {accessibility.liquidGlass && <div className="glass-grain opacity-5" />}
+                <div className={cn(
+                  "border rounded-xl p-6 space-y-4 transition-all relative overflow-hidden",
+                  theme.darkMode ? "bg-stone-900 border-stone-800" : "bg-white border-stone-200",
+                  getBorderClass()
+                )}>
                   <div className="space-y-2">
                     <label className="text-xs font-bold uppercase tracking-wider text-[#91918E] opacity-80">Research Name</label>
                     <input 
@@ -608,55 +1012,46 @@ export default function App() {
               {/* Appearance Section */}
               <div className="mb-12">
                 <div className="flex items-center gap-2 mb-6">
-                  <Palette className="w-5 h-5 text-[#91918E]" />
+                  <Palette className="w-5 h-5 text-stone-500" />
                   <h2 className="text-xl font-bold tracking-tight">Appearance</h2>
                 </div>
-                <div className={cn("border rounded-xl p-6 space-y-6 transition-all duration-500 relative overflow-hidden", accessibility.liquidGlass ? "liquid-glass" : (theme.darkMode ? "bg-[#252525]" : "bg-white"), getBorderClass())}>
-                  {accessibility.liquidGlass && <div className="glass-grain opacity-5" />}
+                <div className={cn(
+                  "border rounded-xl p-6 space-y-6 transition-all relative overflow-hidden",
+                  theme.darkMode ? "bg-stone-900 border-stone-800" : "bg-white border-stone-200"
+                )}>
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className={cn("text-sm font-medium", accessibility.highContrast && "high-contrast-text")}>Dark Mode</p>
-                      <p className={cn("text-xs opacity-60", accessibility.highContrast && "high-contrast-dim")}>Reduce eye strain in low light</p>
+                      <p className="text-sm font-medium">Dark Mode</p>
+                      <p className="text-xs opacity-60">Reduce eye strain in low light</p>
                     </div>
                     <button 
                       onClick={() => setTheme({...theme, darkMode: !theme.darkMode})}
                       className={cn(
-                        "w-14 h-7 rounded-full relative transition-all duration-300 shadow-inner flex items-center px-1",
-                        theme.darkMode ? "bg-white" : "bg-[#141414]"
+                        "w-12 h-6 rounded-full relative transition-all duration-300 flex items-center px-1",
+                        theme.darkMode ? "bg-blue-600" : "bg-stone-200"
                       )}
                     >
                       <div className={cn(
-                        "z-10 w-5 h-5 rounded-full transition-all duration-300 flex items-center justify-center transform shadow-md",
-                        theme.darkMode ? "bg-black translate-x-7" : "bg-white translate-x-0"
-                      )}>
-                        {theme.darkMode ? <Moon className="w-3 h-3 text-white" /> : <Sun className="w-3 h-3 text-black" />}
-                      </div>
-                      <div className="absolute inset-0 flex items-center justify-between px-2 pointer-events-none">
-                        <Sun className={cn("w-3 h-3 transition-opacity", theme.darkMode ? "opacity-0" : "text-white opacity-40")} />
-                        <Moon className={cn("w-3 h-3 transition-opacity", theme.darkMode ? "text-black opacity-40" : "opacity-0")} />
-                      </div>
+                        "w-4 h-4 rounded-full transition-all duration-300 shadow-sm bg-white",
+                        theme.darkMode ? "translate-x-6" : "translate-x-0"
+                      )} />
                     </button>
                   </div>
                   <div className="space-y-3">
-                    <p className={cn("text-sm font-medium", accessibility.highContrast && "high-contrast-text")}>Border Strength</p>
+                    <p className="text-sm font-medium">Border Style</p>
                     <div className="grid grid-cols-3 gap-3">
                       {(['subtle', 'medium', 'heavy'] as const).map((strength) => (
                         <button
                           key={strength}
                           onClick={() => setTheme({...theme, borderStrength: strength})}
                           className={cn(
-                            "py-4 text-xs rounded-lg border-2 transition-all flex flex-col items-center gap-2",
+                            "py-3 text-xs rounded-lg border transition-all",
                             theme.borderStrength === strength 
-                              ? (theme.darkMode ? "bg-white text-black border-white ring-2 ring-white/20" : "bg-black text-white border-black ring-2 ring-black/20")
-                              : (theme.darkMode ? "bg-[#191919] border-neutral-700 text-neutral-400 hover:border-white" : "bg-white border-neutral-300 text-neutral-500 hover:border-black"),
-                            strength === 'subtle' ? "border-[1px]" : strength === 'medium' ? "border-[2px]" : "border-[3.5px]"
+                              ? "bg-blue-600 text-white border-blue-600"
+                              : (theme.darkMode ? "bg-stone-900 border-stone-800 text-stone-400 hover:border-stone-600" : "bg-white border-stone-200 text-stone-500 hover:border-stone-400")
                           )}
                         >
-                          <span className="font-bold">{strength.charAt(0).toUpperCase() + strength.slice(1)}</span>
-                          <div className={cn(
-                            "w-8 h-1 rounded-full",
-                            theme.borderStrength === strength ? (theme.darkMode ? "bg-black" : "bg-white") : "bg-current opacity-40"
-                          )} />
+                          {strength.charAt(0).toUpperCase() + strength.slice(1)}
                         </button>
                       ))}
                     </div>
@@ -667,13 +1062,15 @@ export default function App() {
               {/* Accessibility Section */}
               <div className="mb-12">
                 <div className="flex items-center gap-2 mb-6">
-                  <Eye className="w-5 h-5 text-[#91918E]" />
+                  <Eye className="w-5 h-5 text-stone-500" />
                   <h2 className="text-xl font-bold tracking-tight">Accessibility</h2>
                 </div>
-                <div className={cn("border rounded-xl p-6 space-y-6 transition-all duration-500 relative overflow-hidden", accessibility.liquidGlass ? "liquid-glass" : (theme.darkMode ? "bg-[#252525]" : "bg-white"), getBorderClass())}>
-                  {accessibility.liquidGlass && <div className="glass-grain opacity-5" />}
+                <div className={cn(
+                  "border rounded-xl p-6 space-y-6 transition-all relative overflow-hidden",
+                  theme.darkMode ? "bg-stone-900 border-stone-800" : "bg-white border-stone-200"
+                )}>
                    <div className="space-y-3">
-                    <p className={cn("text-sm font-medium flex items-center gap-2", accessibility.highContrast && "high-contrast-text")}>
+                    <p className="text-sm font-medium flex items-center gap-2">
                        <Type className="w-4 h-4 opacity-60" />
                        Content Font Size
                     </p>
@@ -686,56 +1083,27 @@ export default function App() {
                         step="1"
                         value={parseInt(accessibility.fontSize)}
                         onChange={(e) => setAccessibility({...accessibility, fontSize: `${e.target.value}px`})}
-                        className="grow accent-black dark:accent-white"
+                        className="grow accent-blue-600"
                       />
                       <span className="text-sm">Large</span>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between pt-4 border-t border-inherit">
+                  <div className="flex items-center justify-between pt-4 border-t border-stone-200 dark:border-stone-800">
                     <div>
-                      <p className={cn("text-sm font-medium", accessibility.highContrast && "high-contrast-text")}>High Contrast</p>
-                      <p className={cn("text-xs opacity-60", accessibility.highContrast && "high-contrast-dim")}>Force readable text colors</p>
+                      <p className="text-sm font-medium">High Contrast</p>
+                      <p className="text-xs opacity-60">Force maximum legibility</p>
                     </div>
                     <button 
                       onClick={() => setAccessibility({...accessibility, highContrast: !accessibility.highContrast})}
                       className={cn(
-                        "w-14 h-7 rounded-full relative transition-all duration-300 shadow-inner flex items-center px-1 border",
-                        accessibility.highContrast 
-                          ? (theme.darkMode ? "bg-white border-white" : "bg-black border-black") 
-                          : "bg-neutral-100 border-neutral-300"
+                        "w-12 h-6 rounded-full relative transition-all duration-300 flex items-center px-1",
+                        accessibility.highContrast ? "bg-blue-600" : "bg-stone-200"
                       )}
                     >
                       <div className={cn(
-                        "z-10 w-5 h-5 rounded-full transition-all duration-300 flex items-center justify-center transform shadow-md",
-                        accessibility.highContrast 
-                          ? (theme.darkMode ? "bg-black translate-x-7" : "bg-white translate-x-7") 
-                          : (theme.darkMode ? "bg-neutral-800 translate-x-0" : "bg-white translate-x-0")
-                      )}>
-                        <Eye className={cn("w-3 h-3", accessibility.highContrast ? (theme.darkMode ? "text-white" : "text-black") : "text-neutral-400")} />
-                      </div>
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-4 border-t border-inherit">
-                    <div>
-                      <p className={cn("text-sm font-medium", accessibility.highContrast && "high-contrast-text")}>Liquid Glass</p>
-                      <p className={cn("text-xs opacity-60", accessibility.highContrast && "high-contrast-dim")}>Organic blur and ambient reflections</p>
-                    </div>
-                    <button 
-                      onClick={() => setAccessibility({...accessibility, liquidGlass: !accessibility.liquidGlass})}
-                      className={cn(
-                        "w-14 h-7 rounded-full relative transition-all duration-300 shadow-inner flex items-center px-1 border",
-                        accessibility.liquidGlass 
-                          ? (theme.darkMode ? "bg-blue-400 border-blue-400" : "bg-blue-600 border-blue-600") 
-                          : "bg-neutral-100 border-neutral-300"
-                      )}
-                    >
-                      <div className={cn(
-                        "z-10 w-5 h-5 rounded-full transition-all duration-300 flex items-center justify-center transform shadow-md bg-white",
-                        accessibility.liquidGlass ? "translate-x-7" : "translate-x-0"
-                      )}>
-                        <div className={cn("w-1.5 h-1.5 rounded-full", accessibility.liquidGlass ? "bg-blue-600" : "bg-neutral-400")} />
-                      </div>
+                        "w-4 h-4 rounded-full transition-all duration-300 shadow-sm bg-white",
+                        accessibility.highContrast ? "translate-x-6" : "translate-x-0"
+                      )} />
                     </button>
                   </div>
                 </div>
@@ -743,7 +1111,8 @@ export default function App() {
             </motion.div>
           )}
         </AnimatePresence>
-      </main>
+      </div>
+    </main>
       </div>
     </div>
   );

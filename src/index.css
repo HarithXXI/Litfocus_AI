@@ -68,136 +68,59 @@
   @apply border-t border-inherit my-8;
 }
 
-/* Specific Sidebar Transitions */
+/* Sidebar Transitions */
 aside {
-  @apply transition-all duration-300;
+  @apply transition-all duration-250 ease-in-out;
 }
 
-/* Prominent Borders */
-.border-subtle { 
-  border-width: 1px !important;
-  border-color: #E2E8F0 !important; /* Slate 200 */
-}
-
-.dark .border-subtle {
-  border-color: #1E293B !important; /* Slate 800 */
-}
-
-.border-medium { 
-  border-width: 2px !important;
-  border-color: #94A3B8 !important; /* Slate 400 */
-}
-
-.dark .border-medium {
-  border-color: #334155 !important; /* Slate 700 */
-}
-
-.border-heavy { 
-  border-width: 3.5px !important;
-  border-color: #64748B !important; /* Slate 500 */
-}
-
-.dark .border-heavy {
-  border-color: #94A3B8 !important; /* Slate 400 */
-}
-
-/* Liquid Glass Effect */
-.liquid-glass {
-  @apply transition-all duration-500;
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  box-shadow: 
-    0 8px 32px 0 rgba(0, 0, 0, 0.1),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.1);
-}
-
-.dark .liquid-glass {
-  background: rgba(255, 255, 255, 0.03);
-  backdrop-filter: blur(40px) saturate(200%);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 
-    0 8px 32px 0 rgba(0, 0, 0, 0.2),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
-}
-
-.liquid-glass-accent {
-  background: rgba(255, 255, 255, 0.25);
-  backdrop-filter: blur(32px) saturate(200%);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-}
-
-.dark .liquid-glass-accent {
-  background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(32px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-}
-
-.glass-grain {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0.15;
-  pointer-events: none;
-  mix-blend-mode: overlay;
-  z-index: -1;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-}
-
-.ambient-background {
+/* Minimal Glass Effect */
+.minimal-sidebar {
   position: fixed;
-  inset: 0;
-  z-index: -1;
-  overflow: hidden;
-  pointer-events: none;
-  background: #fbfbfa;
-  transition: background 0.8s ease;
+  top: 0;
+  left: 0;
+  height: 100vh;
+  width: 280px;
+  z-index: 1000;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-col: column;
 }
 
-.dark .ambient-background {
-  background: #080808;
+.dark .minimal-sidebar {
+  background: rgba(0, 0, 0, 0.25);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
 }
 
-.ambient-blob {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(120px);
-  mix-blend-mode: multiply;
-  opacity: 0.5;
-  animation: float 30s infinite alternate ease-in-out;
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
 }
 
-.dark .ambient-blob {
-  opacity: 0.35;
-  mix-blend-mode: screen;
-  filter: blur(140px);
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-@keyframes float {
-  0% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(30%, 20%) scale(1.1); }
-  66% { transform: translate(-20%, 40%) scale(0.9); }
-  100% { transform: translate(10%, -10%) scale(1); }
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 10px;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 /* High Contrast Text */
 .high-contrast-text {
   font-weight: 700 !important;
   color: #000000 !important;
-  opacity: 1 !important;
 }
 
 .dark .high-contrast-text {
   color: #FFFFFF !important;
 }
 
-.high-contrast-dim {
-  font-weight: 600 !important;
-  color: #000000 !important;
-  opacity: 1 !important;
-}
-
-.dark .high-contrast-dim {
-  color: #FFFFFF !important;
-}
