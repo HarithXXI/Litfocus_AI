@@ -346,7 +346,7 @@ export default function App() {
   return (
     <div className={cn(
       "flex h-screen transition-colors duration-250 font-sans overflow-hidden relative",
-      theme.darkMode ? "bg-stone-950 text-stone-200" : "bg-stone-50 text-stone-900"
+      theme.darkMode ? "dark text-stone-200 glass-bg-dark" : "text-stone-900 glass-bg-light"
     )} style={{ fontSize: accessibility.fontSize }}>
       
       {/* Sidebar Overlay Backdrop */}
@@ -401,7 +401,12 @@ export default function App() {
                 handleAnalyze(file);
               }
             }}
-            className="minimal-sidebar"
+            className={cn(
+              "fixed top-0 left-0 h-screen w-[280px] z-[1000] flex flex-col transition-all duration-300",
+              accessibility.liquidGlass 
+                ? "glass-sidebar" 
+                : "bg-white dark:bg-[#1A1A1A] border-r border-stone-200 dark:border-stone-800"
+            )}
           >
 
             {/* Drag Overlay */}
@@ -1027,13 +1032,32 @@ export default function App() {
                     <button 
                       onClick={() => setTheme({...theme, darkMode: !theme.darkMode})}
                       className={cn(
-                        "w-12 h-6 rounded-full relative transition-all duration-300 flex items-center px-1",
+                        "w-12 h-6 rounded-full relative transition-all duration-300 flex items-center px-1 shrink-0",
                         theme.darkMode ? "bg-blue-600" : "bg-stone-200"
                       )}
                     >
                       <div className={cn(
                         "w-4 h-4 rounded-full transition-all duration-300 shadow-sm bg-white",
                         theme.darkMode ? "translate-x-6" : "translate-x-0"
+                      )} />
+                    </button>
+                  </div>
+                  
+                  <div className="flex items-center justify-between pt-4 border-t border-stone-100 dark:border-stone-800">
+                    <div>
+                      <p className="text-sm font-medium">Liquid Glass Effect</p>
+                      <p className="text-xs opacity-60">Translucent frosted glass sidebar</p>
+                    </div>
+                    <button 
+                      onClick={() => setAccessibility({...accessibility, liquidGlass: !accessibility.liquidGlass})}
+                      className={cn(
+                        "w-12 h-6 rounded-full relative transition-all duration-300 flex items-center px-1 shrink-0",
+                        accessibility.liquidGlass ? "bg-blue-600" : "bg-stone-200"
+                      )}
+                    >
+                      <div className={cn(
+                        "w-4 h-4 rounded-full transition-all duration-300 shadow-sm bg-white",
+                        accessibility.liquidGlass ? "translate-x-6" : "translate-x-0"
                       )} />
                     </button>
                   </div>
