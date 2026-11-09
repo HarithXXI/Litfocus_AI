@@ -28,9 +28,6 @@ import {
   Sun,
   Type,
   Menu,
-  PanelLeftClose,
-  PanelLeft,
-  ChevronLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
@@ -59,6 +56,114 @@ interface Analysis {
   sentiment?: string;
 }
 
+const DEFAULT_PROFILE = { name: 'Guest Researcher', bio: 'Academic Enthusiast', avatar: '' };
+const DEFAULT_THEME: { darkMode: boolean; accentColor: string; borderStrength: 'subtle' | 'medium' | 'heavy' } = { darkMode: false, accentColor: '#141414', borderStrength: 'medium' };
+const DEFAULT_ACCESSIBILITY = { fontSize: '14px', highContrast: false, liquidGlass: true };
+const SUPPORTED_FILE_EXTENSIONS = ['.txt', '.csv', '.docx', '.xlsx'];
+const SUPPORTED_FILE_TYPES = new Set([
+  'text/plain',
+  'text/csv',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+function readStoredValue<T>(key: string, fallback: T, isValid: (value: unknown) => value is T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed: unknown = JSON.parse(raw);
+    if (isValid(parsed)) return parsed;
+    console.warn(`Ignoring invalid stored value for ${key}`);
+  } catch (error) {
+    console.warn(`Could not read stored value for ${key}`, error);
+  }
+  return fallback;
+}
+
+function writeStoredValue(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.warn(`Could not save stored value for ${key}`, error);
+  }
+}
+
+function isAnalysis(value: unknown): value is Analysis {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === 'string' &&
+    typeof candidate.title === 'string' &&
+    typeof candidate.content === 'string' &&
+    typeof candidate.summary_short === 'string' &&
+    typeof candidate.summary_detailed === 'string' &&
+    Array.isArray(candidate.key_points) &&
+    candidate.key_points.every((item) => typeof item === 'string') &&
+    Array.isArray(candidate.keywords) &&
+    candidate.keywords.every((item) => typeof item === 'string') &&
+    typeof candidate.timestamp === 'number' &&
+    ['eli5', 'deep-dive', 'key-points'].includes(candidate.mode as string) &&
+    ['text', 'url', 'file'].includes(candidate.sourceType as string) &&
+    typeof candidate.excerpt === 'string'
+  );
+}
+
+function isAnalysisList(value: unknown): value is Analysis[] {
+  return Array.isArray(value) && value.every(isAnalysis);
+}
+
+function isProfile(value: unknown): value is typeof DEFAULT_PROFILE {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.name === 'string' && typeof candidate.bio === 'string' && typeof candidate.avatar === 'string';
+}
+
+function isTheme(value: unknown): value is typeof DEFAULT_THEME {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.darkMode === 'boolean' &&
+    typeof candidate.accentColor === 'string' &&
+    ['subtle', 'medium', 'heavy'].includes(candidate.borderStrength as string);
+}
+
+function isAccessibility(value: unknown): value is typeof DEFAULT_ACCESSIBILITY {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.fontSize === 'string' &&
+    /^\d+px$/.test(candidate.fontSize) &&
+    typeof candidate.highContrast === 'boolean' &&
+    typeof candidate.liquidGlass === 'boolean';
+}
+
+function isSupportedFile(file: File) {
+  const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+  return SUPPORTED_FILE_TYPES.has(file.type) || SUPPORTED_FILE_EXTENSIONS.includes(extension);
+}
+
+interface AnalysisResponse {
+  title: string;
+  summary_short: string;
+  summary_detailed: string;
+  key_points: string[];
+  keywords: string[];
+  sentiment: string;
+  reading_time: string;
+}
+
+function isAnalysisResponse(value: unknown): value is AnalysisResponse {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.title === 'string' &&
+    typeof candidate.summary_short === 'string' &&
+    typeof candidate.summary_detailed === 'string' &&
+    Array.isArray(candidate.key_points) &&
+    candidate.key_points.every((item) => typeof item === 'string') &&
+    Array.isArray(candidate.keywords) &&
+    candidate.keywords.every((item) => typeof item === 'string') &&
+    typeof candidate.sentiment === 'string' &&
+    typeof candidate.reading_time === 'string';
+}
+
 export default function App() {
   const [history, setHistory] = useState<Analysis[]>([]);
   const [currentAnalysis, setCurrentAnalysis] = useState<Analysis | null>(null);
@@ -70,33 +175,27 @@ export default function App() {
   // Sidebar states
   type SidebarState = 'closed' | 'open';
   const [sidebarState, setSidebarState] = useState<SidebarState>('closed');
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   // Settings states
-  const [profile, setProfile] = useState({ name: 'Guest Researcher', bio: 'Academic Enthusiast', avatar: '' });
-  const [theme, setTheme] = useState({ darkMode: false, accentColor: '#141414', borderStrength: 'medium' });
-  const [accessibility, setAccessibility] = useState({ fontSize: '14px', highContrast: false, liquidGlass: true });
+  const [profile, setProfile] = useState(DEFAULT_PROFILE);
+  const [theme, setTheme] = useState(DEFAULT_THEME);
+  const [accessibility, setAccessibility] = useState(DEFAULT_ACCESSIBILITY);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   // Load state from localStorage
   useEffect(() => {
-    const savedHistory = localStorage.getItem('litfocus_history');
-    if (savedHistory) setHistory(JSON.parse(savedHistory));
-    
-    const savedProfile = localStorage.getItem('litfocus_profile');
-    if (savedProfile) setProfile(JSON.parse(savedProfile));
-    
-    const savedTheme = localStorage.getItem('litfocus_theme');
-    if (savedTheme) setTheme(JSON.parse(savedTheme));
-
-    const savedAccessibility = localStorage.getItem('litfocus_accessibility');
-    if (savedAccessibility) setAccessibility(JSON.parse(savedAccessibility));
+    setHistory(readStoredValue('litfocus_history', [], isAnalysisList));
+    setProfile(readStoredValue('litfocus_profile', DEFAULT_PROFILE, isProfile));
+    setTheme(readStoredValue('litfocus_theme', DEFAULT_THEME, isTheme));
+    setAccessibility(readStoredValue('litfocus_accessibility', DEFAULT_ACCESSIBILITY, isAccessibility));
+    setIsHydrated(true);
   }, []);
 
   // Save states
-  useEffect(() => localStorage.setItem('litfocus_history', JSON.stringify(history)), [history]);
-  useEffect(() => localStorage.setItem('litfocus_profile', JSON.stringify(profile)), [profile]);
-  useEffect(() => localStorage.setItem('litfocus_theme', JSON.stringify(theme)), [theme]);
-  useEffect(() => localStorage.setItem('litfocus_accessibility', JSON.stringify(accessibility)), [accessibility]);
+  useEffect(() => { if (isHydrated) writeStoredValue('litfocus_history', history); }, [history, isHydrated]);
+  useEffect(() => { if (isHydrated) writeStoredValue('litfocus_profile', profile); }, [profile, isHydrated]);
+  useEffect(() => { if (isHydrated) writeStoredValue('litfocus_theme', theme); }, [theme, isHydrated]);
+  useEffect(() => { if (isHydrated) writeStoredValue('litfocus_accessibility', accessibility); }, [accessibility, isHydrated]);
 
   // Input states
   const [inputText, setInputText] = useState('');
@@ -122,10 +221,16 @@ export default function App() {
     return () => clearInterval(interval);
   }, [isAnalyzing]);
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async (text: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable');
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error('Copy failed:', error);
+      alert('Could not copy the analysis. Please copy the text manually.');
+    }
   };
 
   const exportToPDF = (analysis: Analysis) => {
@@ -221,6 +326,10 @@ export default function App() {
 
     if (activeSourceType !== 'file' && !inputText.trim()) return;
     if (activeSourceType === 'file' && !fileToAnalyze) return;
+    if (fileToAnalyze && !isSupportedFile(fileToAnalyze)) {
+      alert('Unsupported file type. Use TXT, CSV, DOCX, or XLSX.');
+      return;
+    }
     
     setIsAnalyzing(true);
     const tempId = crypto.randomUUID();
@@ -234,17 +343,26 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: inputText })
         });
-        if (!extractRes.ok) throw new Error("Failed to extract content from URL");
-        const extractData = await extractRes.json();
+        const extractData: unknown = await extractRes.json();
+        if (!extractRes.ok) {
+          const errorMessage = extractData && typeof extractData === 'object' && 'error' in extractData && typeof extractData.error === 'string'
+            ? extractData.error
+            : 'Failed to extract content from URL';
+          throw new Error(errorMessage);
+        }
+        if (!extractData || typeof extractData !== 'object' || !('text' in extractData) || typeof extractData.text !== 'string' || !extractData.text.trim()) {
+          throw new Error('The URL extraction response was invalid');
+        }
         textToAnalyze = extractData.text;
       } else if (activeSourceType === 'file' && fileToAnalyze) {
-        if (fileToAnalyze.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        const fileName = fileToAnalyze.name.toLowerCase();
+        if (fileToAnalyze.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || fileName.endsWith('.docx')) {
           const arrayBuffer = await fileToAnalyze.arrayBuffer();
           const result = await mammoth.extractRawText({ arrayBuffer });
           textToAnalyze = result.value;
-        } else if (fileToAnalyze.type === 'text/plain') {
+        } else if (fileToAnalyze.type === 'text/plain' || fileToAnalyze.type === 'text/csv' || fileName.endsWith('.txt') || fileName.endsWith('.csv')) {
           textToAnalyze = await fileToAnalyze.text();
-        } else if (fileToAnalyze.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+        } else if (fileToAnalyze.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || fileName.endsWith('.xlsx')) {
           const arrayBuffer = await fileToAnalyze.arrayBuffer();
           const workbook = XLSX.read(arrayBuffer, { type: 'array' });
           let fullXlsxText = '';
@@ -254,8 +372,15 @@ export default function App() {
           });
           textToAnalyze = fullXlsxText;
         } else {
-          textToAnalyze = await fileToAnalyze.text().catch(() => "Binary content");
+          throw new Error('Unsupported file type. Use TXT, CSV, DOCX, or XLSX.');
         }
+      }
+
+      if (!textToAnalyze.trim()) {
+        throw new Error('No readable text was found in the selected source');
+      }
+      if (activeSourceType === 'file' && inputText.trim()) {
+        textToAnalyze = `${textToAnalyze.trim()}\n\nUser-provided file context:\n${inputText.trim()}`;
       }
 
       const analyzeRes = await fetch('/api/analyze', {
@@ -264,12 +389,17 @@ export default function App() {
         body: JSON.stringify({ text: textToAnalyze, mode: analysisMode })
       });
 
+      const responseData: unknown = await analyzeRes.json();
       if (!analyzeRes.ok) {
-        const errData = await analyzeRes.json();
-        throw new Error(errData.error || 'Failed to analyze');
+        const errorMessage = responseData && typeof responseData === 'object' && 'error' in responseData && typeof responseData.error === 'string'
+          ? responseData.error
+          : 'Failed to analyze';
+        throw new Error(errorMessage);
       }
-
-      const data = await analyzeRes.json();
+      if (!isAnalysisResponse(responseData)) {
+        throw new Error('The analysis response was incomplete or invalid');
+      }
+      const data = responseData;
 
       const newAnalysis: Analysis = {
         id: tempId,
@@ -277,14 +407,14 @@ export default function App() {
         content: data.summary_detailed,
         summary_short: data.summary_short,
         summary_detailed: data.summary_detailed,
-        key_points: data.key_points || [],
-        keywords: data.keywords || [],
+        key_points: data.key_points,
+        keywords: data.keywords,
         sentiment: data.sentiment,
-        readingTime: data.reading_time || '5 mins',
+        readingTime: data.reading_time,
         timestamp: Date.now(),
         mode: analysisMode,
         sourceType: activeSourceType,
-        excerpt: (textToAnalyze || inputText).substring(0, 200) + '...'
+        excerpt: textToAnalyze.substring(0, 200) + '...'
       };
 
       setHistory(prev => [newAnalysis, ...prev]);
@@ -396,6 +526,10 @@ export default function App() {
                   alert("File is too large. Max size is 50MB.");
                   return;
                 }
+                if (!isSupportedFile(file)) {
+                  alert("Unsupported file type. Use TXT, CSV, DOCX, or XLSX.");
+                  return;
+                }
                 setSourceType('file');
                 setSelectedFile(file);
                 handleAnalyze(file);
@@ -431,8 +565,7 @@ export default function App() {
             
             {/* Sidebar Header & Close Toggle */}
             <div className={cn(
-              "p-4 flex items-center justify-between gap-2 overflow-hidden",
-              isSidebarCollapsed && !isMobile ? "flex-col" : "flex-row"
+              "p-4 flex items-center justify-between gap-2 overflow-hidden"
             )}>
               <div 
                 className="flex items-center gap-2 cursor-pointer transition-colors"
@@ -441,15 +574,13 @@ export default function App() {
                 <div className="w-6 h-6 bg-[#141414] rounded flex-shrink-0 flex items-center justify-center">
                   <BookOpen className="w-4 h-4 text-white" />
                 </div>
-                {(!isSidebarCollapsed || isMobile) && (
-                  <motion.span 
-                    initial={{ opacity: 0 }} 
-                    animate={{ opacity: 1 }}
-                    className="font-semibold text-sm tracking-tight truncate"
-                  >
-                    LitFocus AI
-                  </motion.span>
-                )}
+                <motion.span
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="font-semibold text-sm tracking-tight truncate"
+                >
+                  LitFocus AI
+                </motion.span>
               </div>
               
               <button 
@@ -466,8 +597,7 @@ export default function App() {
 
             {/* Profile Bar */}
             <div className={cn(
-              "px-4 py-2 mb-4 flex items-center gap-3 overflow-hidden transition-all",
-              isSidebarCollapsed && !isMobile ? "justify-center" : ""
+              "px-4 py-2 mb-4 flex items-center gap-3 overflow-hidden transition-all"
             )}>
               <div 
                 className="w-9 h-9 rounded-full bg-[#141414] text-white flex items-center justify-center text-sm font-bold flex-shrink-0 cursor-pointer"
@@ -475,16 +605,14 @@ export default function App() {
               >
                 {profile.name[0]}
               </div>
-              {(!isSidebarCollapsed || isMobile) && (
-                <motion.div 
-                  initial={{ opacity: 0 }} 
-                  animate={{ opacity: 1 }}
-                  className="flex-1 min-w-0"
-                >
-                  <p className={cn("text-sm font-bold truncate leading-tight", accessibility.highContrast && "high-contrast-text")}>{profile.name}</p>
-                  <p className={cn("text-xs opacity-60 truncate leading-tight mt-0.5", accessibility.highContrast && "high-contrast-dim")}>{profile.bio}</p>
-                </motion.div>
-              )}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex-1 min-w-0"
+              >
+                <p className={cn("text-sm font-bold truncate leading-tight", accessibility.highContrast && "high-contrast-text")}>{profile.name}</p>
+                <p className={cn("text-xs opacity-60 truncate leading-tight mt-0.5", accessibility.highContrast && "high-contrast-dim")}>{profile.bio}</p>
+              </motion.div>
             </div>
 
             {/* Sidebar Actions */}
@@ -493,34 +621,31 @@ export default function App() {
                 onClick={() => { setView('input'); setCurrentAnalysis(null); }}
                 className={cn(
                   "w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md transition-colors group",
-                  theme.darkMode ? "hover:bg-[#2A2A2A]" : "hover:bg-[#EBEAE9]",
-                  isSidebarCollapsed && !isMobile ? "justify-center" : ""
+                  theme.darkMode ? "hover:bg-[#2A2A2A]" : "hover:bg-[#EBEAE9]"
                 )}
                 title="New Analysis"
               >
                 <Plus className="w-4 h-4 flex-shrink-0" />
-                {(!isSidebarCollapsed || isMobile) && <span className="truncate">New Analysis</span>}
+                <span className="truncate">New Analysis</span>
               </button>
             </div>
 
-            {(!isSidebarCollapsed || isMobile) && (
-              <motion.div 
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                className="px-3 mb-4"
-              >
-                <div className="relative group">
-                  <Search className="absolute left-2 top-1.5 w-3.5 h-3.5 text-[#91918E]" />
-                  <input 
-                    type="text" 
-                    placeholder="Search history..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-7 pr-2 py-1.5 text-xs bg-[#EBEAE9] bg-opacity-50 border-none rounded focus:ring-1 focus:ring-[#141414] focus:outline-none placeholder-[#91918E]"
-                  />
-                </div>
-              </motion.div>
-            )}
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              className="px-3 mb-4"
+            >
+              <div className="relative group">
+                <Search className="absolute left-2 top-1.5 w-3.5 h-3.5 text-[#91918E]" />
+                <input
+                  type="text"
+                  placeholder="Search history..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-7 pr-2 py-1.5 text-xs bg-[#EBEAE9] bg-opacity-50 border-none rounded focus:ring-1 focus:ring-[#141414] focus:outline-none placeholder-[#91918E]"
+                />
+              </div>
+            </motion.div>
 
             {/* Processing Progress */}
             <AnimatePresence>
@@ -559,17 +684,13 @@ export default function App() {
 
             {/* History List */}
             <div className="flex-1 overflow-y-auto px-1 space-y-0.5 custom-scrollbar">
-              {(!isSidebarCollapsed || isMobile) && (
-                <div className="px-3 py-2 text-[10px] font-bold text-[#91918E] uppercase tracking-wider">History</div>
-              )}
+              <div className="px-3 py-2 text-[10px] font-bold text-[#91918E] uppercase tracking-wider">History</div>
               
               {filteredHistory.length === 0 ? (
-                (!isSidebarCollapsed || isMobile) && (
-                  <div className="px-5 py-4 text-center">
-                    <HistoryIcon className="w-8 h-8 text-[#EBEAE9] mx-auto mb-2" />
-                    <p className="text-[10px] text-[#91918E]">No history yet</p>
-                  </div>
-                )
+                <div className="px-5 py-4 text-center">
+                  <HistoryIcon className="w-8 h-8 text-[#EBEAE9] mx-auto mb-2" />
+                  <p className="text-[10px] text-[#91918E]">No history yet</p>
+                </div>
               ) : (
                 <AnimatePresence initial={false}>
                   {filteredHistory.map((item) => (
@@ -584,21 +705,18 @@ export default function App() {
                         "group flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg cursor-pointer transition-all mx-1 mb-0.5",
                         currentAnalysis?.id === item.id 
                           ? "bg-blue-500/10 text-blue-600 font-medium" 
-                          : "hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-600 dark:text-stone-400 opacity-80 hover:opacity-100",
-                        isSidebarCollapsed && !isMobile ? "justify-center" : ""
+                          : "hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-600 dark:text-stone-400 opacity-80 hover:opacity-100"
                       )}
                       title={item.title}
                     >
                       <FileText className="w-3.5 h-3.5 flex-shrink-0 text-[#91918E]" />
-                      {(!isSidebarCollapsed || isMobile) && <span className="truncate flex-1">{item.title}</span>}
-                      {(!isSidebarCollapsed || isMobile) && (
-                        <button 
-                          onClick={(e) => deleteFromHistory(item.id, e)}
-                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#D9D8D6] rounded transition-opacity"
-                        >
-                          <Trash2 className="w-3 h-3 text-[#91918E]" />
-                        </button>
-                      )}
+                      <span className="truncate flex-1">{item.title}</span>
+                      <button
+                        onClick={(e) => deleteFromHistory(item.id, e)}
+                        className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#D9D8D6] rounded transition-opacity"
+                      >
+                        <Trash2 className="w-3 h-3 text-[#91918E]" />
+                      </button>
                     </motion.div>
                   ))}
                 </AnimatePresence>
@@ -611,19 +729,16 @@ export default function App() {
                 onClick={() => setView('settings')}
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg transition-colors",
-                  view === 'settings' ? (theme.darkMode ? "bg-stone-800" : "bg-stone-100") : "hover:bg-stone-50 dark:hover:bg-stone-800",
-                  isSidebarCollapsed && !isMobile ? "justify-center" : ""
+                  view === 'settings' ? (theme.darkMode ? "bg-stone-800" : "bg-stone-100") : "hover:bg-stone-50 dark:hover:bg-stone-800"
                 )}
                 title="Settings"
               >
                 <SettingsIcon className="w-3.5 h-3.5 flex-shrink-0" />
-                {(!isSidebarCollapsed || isMobile) && <span>Settings</span>}
+                <span>Settings</span>
               </button>
-              {(!isSidebarCollapsed || isMobile) && (
-                <div className="px-4 py-2 text-[10px] opacity-40">
-                  © 2026 LitFocus AI
-                </div>
-              )}
+              <div className="px-4 py-2 text-[10px] opacity-40">
+                © 2026 LitFocus AI
+              </div>
             </div>
           </motion.aside>
         )}
@@ -760,15 +875,21 @@ export default function App() {
                           <div className="flex flex-col items-center justify-center pt-5 pb-6">
                             <Upload className="w-8 h-8 text-[#91918E] mb-3 group-hover:text-inherit transition-colors" />
                             <p className="mb-2 text-sm font-medium">Click to upload or drag and drop</p>
-                            <p className="text-xs opacity-60">PDF, TXT, DOCX, PPTX, XLSX, or Images (MAX 50MB)</p>
+                            <p className="text-xs opacity-60">TXT, CSV, DOCX, or XLSX (MAX 50MB)</p>
                           </div>
                           <input 
                             type="file" 
+                            accept=".txt,.csv,.docx,.xlsx,text/plain,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                             className="hidden" 
                             onChange={(e) => {
                               const file = e.target.files?.[0];
                               if (file && file.size > 50 * 1024 * 1024) {
                                 alert("File is too large. Max size is 50MB.");
+                                e.target.value = '';
+                                return;
+                              }
+                              if (file && !isSupportedFile(file)) {
+                                alert("Unsupported file type. Use TXT, CSV, DOCX, or XLSX.");
                                 e.target.value = '';
                                 return;
                               }
